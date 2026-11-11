@@ -1,0 +1,38 @@
+# HelpLink Agent CI — thin WRAPPER around RustDesk's own build workflow.
+# Place at: .github/workflows/build-agent.yml in YOUR (public) fork.
+#
+# Why a wrapper? Upstream 1.5.x builds need bridge codegen, a custom Flutter
+# engine, and pinned Rust 1.75 / Flutter 3.24.5 / vcpkg versions — all already
+# encoded in your fork's .github/workflows/flutter-build.yml (copied when you
+# forked). We simply CALL it, so upstream's recipe fixes flow to us on every
+# merge. Zero build-recipe maintenance on our side.
+#
+# Run: Actions tab → build-agent → Run workflow. ~1 hour, free on a public
+# repo (Actions on public repos = unlimited minutes, macOS included).
+# Then grab artifact `rustdesk-unsigned-windows-x86_64` from the run page —
+# a portable folder; wrap it with installer/helplink-agent.iss for the
+# one-click setup exe.
+#
+# NOTE: no repo secrets are needed for the build. The server address + public
+# key are baked at SOURCE level (hbb_common constants) — see
+# fork-rebrand-spec.md §1. Until that bake is committed, the built client
+# points at upstream's public server: set your server manually under
+# Settings → Network for the first pipeline test.
+#
+# Signing is skipped automatically (the sign steps check for upstream signing
+# secrets). If some non-Windows jobs go red (macOS/iOS signing without certs),
+# ignore them — we only need the Windows artifact.
+
+name: build-agent
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['agent-v*']   # fires on rebrand release tags too
+
+jobs:
+  agent:
+    uses: ./.github/workflows/flutter-build.yml
+    with:
+      upload-artifact: true
+      upload-tag: "helplink-agent"   # prerelease on your fork; overwritten each run
