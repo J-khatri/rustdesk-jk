@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/api_server_warning.dart';
+import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
+import 'package:flutter_hbb/common/widgets/toolbar.dart';
 import 'package:get/get.dart';
 
 import '../../common.dart';
@@ -10,100 +13,6 @@ void _showSuccess() {
   showToast(translate("Successful"));
 }
 
-void _showError() {
-  showToast(translate("Error"));
-}
-
-void setPermanentPasswordDialog(OverlayDialogManager dialogManager) async {
-  final pw = await bind.mainGetPermanentPassword();
-  final p0 = TextEditingController(text: pw);
-  final p1 = TextEditingController(text: pw);
-  var validateLength = false;
-  var validateSame = false;
-  dialogManager.show((setState, close) {
-    submit() async {
-      close();
-      dialogManager.showLoading(translate("Waiting"));
-      if (await gFFI.serverModel.setPermanentPassword(p0.text)) {
-        dialogManager.dismissAll();
-        _showSuccess();
-      } else {
-        dialogManager.dismissAll();
-        _showError();
-      }
-    }
-
-    return CustomAlertDialog(
-      title: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.password_rounded, color: MyTheme.accent),
-          Text(translate('Set your own password')).paddingOnly(left: 10),
-        ],
-      ),
-      content: Form(
-          autovalidateMode: AutovalidateMode.onUserInteraction,
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextFormField(
-              autofocus: true,
-              obscureText: true,
-              keyboardType: TextInputType.visiblePassword,
-              decoration: InputDecoration(
-                labelText: translate('Password'),
-              ),
-              controller: p0,
-              validator: (v) {
-                if (v == null) return null;
-                final val = v.trim().length > 5;
-                if (validateLength != val) {
-                  // use delay to make setState success
-                  Future.delayed(Duration(microseconds: 1),
-                      () => setState(() => validateLength = val));
-                }
-                return val
-                    ? null
-                    : translate('Too short, at least 6 characters.');
-              },
-            ),
-            TextFormField(
-              obscureText: true,
-              keyboardType: TextInputType.visiblePassword,
-              decoration: InputDecoration(
-                labelText: translate('Confirmation'),
-              ),
-              controller: p1,
-              validator: (v) {
-                if (v == null) return null;
-                final val = p0.text == v;
-                if (validateSame != val) {
-                  Future.delayed(Duration(microseconds: 1),
-                      () => setState(() => validateSame = val));
-                }
-                return val
-                    ? null
-                    : translate('The confirmation is not identical.');
-              },
-            ),
-          ])),
-      onCancel: close,
-      onSubmit: (validateLength && validateSame) ? submit : null,
-      actions: [
-        dialogButton(
-          'Cancel',
-          icon: Icon(Icons.close_rounded),
-          onPressed: close,
-          isOutline: true,
-        ),
-        dialogButton(
-          'OK',
-          icon: Icon(Icons.done_rounded),
-          onPressed: (validateLength && validateSame) ? submit : null,
-        ),
-      ],
-    );
-  });
-}
-
 void setTemporaryPasswordLengthDialog(
     OverlayDialogManager dialogManager) async {
   List<String> lengths = ['6', '8', '10'];
@@ -111,7 +20,7 @@ void setTemporaryPasswordLengthDialog(
   var index = lengths.indexOf(length);
   if (index < 0) index = 0;
   length = lengths[index];
-  dialogManager.show((setState, close) {
+  dialogManager.show((setState, close, context) {
     setLength(newValue) {
       final oldValue = length;
       if (oldValue == newValue) return;
@@ -145,88 +54,152 @@ void setTemporaryPasswordLengthDialog(
   }, backDismiss: true, clickMaskDismiss: true);
 }
 
-void showServerSettingsWithValue(
-    ServerConfig serverConfig, OverlayDialogManager dialogManager) async {
-  Map<String, dynamic> oldOptions = jsonDecode(await bind.mainGetOptions());
-  final oldCfg = ServerConfig.fromOptions(oldOptions);
+void showServerSettings(OverlayDialogManager dialogManager,
+    void Function(VoidCallback) setState) async {
+  Map<String, dynamic> options = {};
+  try {
+    options = jsonDecode(await bind.mainGetOptions());
+  } catch (e) {
+    print("Invalid server config: $e");
+  }
+  showServerSettingsWithValue(
+      ServerConfig.fromOptions(options), dialogManager, setState);
+}
 
+void showServerSettingsWithValue(
+    ServerConfig serverConfig,
+    OverlayDialogManager dialogManager,
+    void Function(VoidCallback)? upSetState) async {
+  const labelWidth = 120.0;
+  const labelSpacing = 8.0;
   var isInProgress = false;
   final idCtrl = TextEditingController(text: serverConfig.idServer);
   final relayCtrl = TextEditingController(text: serverConfig.relayServer);
   final apiCtrl = TextEditingController(text: serverConfig.apiServer);
   final keyCtrl = TextEditingController(text: serverConfig.key);
 
-  String? idServerMsg;
-  String? relayServerMsg;
-  String? apiServerMsg;
+  RxString idServerMsg = ''.obs;
+  RxString relayServerMsg = ''.obs;
+  RxString apiServerMsg = ''.obs;
 
-  dialogManager.show((setState, close) {
-    Future<bool> validate() async {
-      if (idCtrl.text != oldCfg.idServer) {
-        final res = await validateAsync(idCtrl.text);
-        setState(() => idServerMsg = res);
-        if (idServerMsg != null) return false;
+  final controllers = [idCtrl, relayCtrl, apiCtrl, keyCtrl];
+  final errMsgs = [
+    idServerMsg,
+    relayServerMsg,
+    apiServerMsg,
+  ];
+
+  dialogManager.show((setState, close, context) {
+    Future<bool> submit() async {
+      setState(() {
+        isInProgress = true;
+      });
+      bool ret = await setServerConfig(
+          null,
+          errMsgs,
+          ServerConfig(
+              idServer: idCtrl.text.trim(),
+              relayServer: relayCtrl.text.trim(),
+              apiServer: apiCtrl.text.trim(),
+              key: keyCtrl.text.trim()));
+      setState(() {
+        isInProgress = false;
+      });
+      return ret;
+    }
+
+    Widget buildField(
+        String label, TextEditingController controller, String errorMsg,
+        {String? Function(String?)? validator, bool autofocus = false}) {
+      if (isDesktop || isWeb) {
+        return Row(
+          children: [
+            SizedBox(
+              width: labelWidth,
+              child: Text(label),
+            ),
+            SizedBox(width: labelSpacing),
+            Expanded(
+              child: serverSettingsTextFormField(
+                label: label,
+                controller: controller,
+                errorMsg: errorMsg,
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                showLabelText: false,
+                validator: validator,
+                autofocus: autofocus,
+              ).workaroundFreezeLinuxMint(),
+            ),
+          ],
+        );
       }
-      if (relayCtrl.text != oldCfg.relayServer) {
-        relayServerMsg = await validateAsync(relayCtrl.text);
-        if (relayServerMsg != null) return false;
-      }
-      if (apiCtrl.text != oldCfg.apiServer) {
-        if (apiServerMsg != null) return false;
-      }
-      return true;
+
+      return serverSettingsTextFormField(
+        label: label,
+        controller: controller,
+        errorMsg: errorMsg,
+        validator: validator,
+      ).workaroundFreezeLinuxMint();
     }
 
     return CustomAlertDialog(
-      title: Text(translate('ID/Relay Server')),
-      content: Form(
-          child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                    TextFormField(
-                      controller: idCtrl,
-                      decoration: InputDecoration(
-                          labelText: translate('ID Server'),
-                          errorText: idServerMsg),
-                    )
-                  ] +
-                  (isAndroid
-                      ? [
-                          TextFormField(
-                            controller: relayCtrl,
-                            decoration: InputDecoration(
-                                labelText: translate('Relay Server'),
-                                errorText: relayServerMsg),
-                          )
-                        ]
-                      : []) +
-                  [
-                    TextFormField(
-                      controller: apiCtrl,
-                      decoration: InputDecoration(
-                        labelText: translate('API Server'),
-                      ),
-                      autovalidateMode: AutovalidateMode.onUserInteraction,
-                      validator: (v) {
-                        if (v != null && v.isNotEmpty) {
-                          if (!(v.startsWith('http://') ||
-                              v.startsWith("https://"))) {
-                            return translate("invalid_http");
-                          }
+      title: Row(
+        children: [
+          Expanded(child: Text(translate('ID/Relay Server'))),
+          ...ServerConfigImportExportWidgets(controllers, errMsgs),
+        ],
+      ),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 500),
+        child: Form(
+          child: Obx(() => Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  buildField(translate('ID Server'), idCtrl, idServerMsg.value,
+                      autofocus: true),
+                  SizedBox(height: 8),
+                  if (!isIOS && !isWeb) ...[
+                    buildField(translate('Relay Server'), relayCtrl,
+                        relayServerMsg.value),
+                    SizedBox(height: 8),
+                  ],
+                  buildField(
+                    translate('API Server'),
+                    apiCtrl,
+                    apiServerMsg.value,
+                    validator: (v) {
+                      if (v != null && v.isNotEmpty) {
+                        if (!(v.startsWith('http://') ||
+                            v.startsWith("https://"))) {
+                          return translate("invalid_http");
                         }
-                        return apiServerMsg;
-                      },
+                      }
+                      return null;
+                    },
+                  ),
+                  Padding(
+                    padding: EdgeInsetsDirectional.only(
+                      start: isDesktop || isWeb ? labelWidth + labelSpacing : 0,
                     ),
-                    TextFormField(
-                      controller: keyCtrl,
-                      decoration: InputDecoration(
-                        labelText: 'Key',
-                      ),
+                    child: ApiServerWarning(
+                      controller: apiCtrl,
+                      idController: idCtrl,
+                      message: translate('api_server_connection_tip'),
+                      emptyMessage: translate('api_server_empty_tip'),
                     ),
-                    Offstage(
-                        offstage: !isInProgress,
-                        child: LinearProgressIndicator())
-                  ])),
+                  ),
+                  SizedBox(height: 8),
+                  buildField('Key', keyCtrl, ''),
+                  if (isInProgress)
+                    Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: LinearProgressIndicator(),
+                    ),
+                ],
+              )),
+        ),
+      ),
       actions: [
         dialogButton('Cancel', onPressed: () {
           close();
@@ -234,35 +207,13 @@ void showServerSettingsWithValue(
         dialogButton(
           'OK',
           onPressed: () async {
-            setState(() {
-              idServerMsg = null;
-              relayServerMsg = null;
-              apiServerMsg = null;
-              isInProgress = true;
-            });
-            if (await validate()) {
-              if (idCtrl.text != oldCfg.idServer) {
-                if (oldCfg.idServer.isNotEmpty) {
-                  await gFFI.userModel.logOut();
-                }
-                bind.mainSetOption(
-                    key: "custom-rendezvous-server", value: idCtrl.text);
-              }
-              if (relayCtrl.text != oldCfg.relayServer) {
-                bind.mainSetOption(key: "relay-server", value: relayCtrl.text);
-              }
-              if (keyCtrl.text != oldCfg.key) {
-                bind.mainSetOption(key: "key", value: keyCtrl.text);
-              }
-              if (apiCtrl.text != oldCfg.apiServer) {
-                bind.mainSetOption(key: "api-server", value: apiCtrl.text);
-              }
+            if (await submit()) {
               close();
               showToast(translate('Successful'));
+              upSetState?.call(() {});
+            } else {
+              showToast(translate('Failed'));
             }
-            setState(() {
-              isInProgress = false;
-            });
           },
         ),
       ],
@@ -270,11 +221,55 @@ void showServerSettingsWithValue(
   });
 }
 
-Future<String?> validateAsync(String value) async {
-  value = value.trim();
-  if (value.isEmpty) {
-    return null;
-  }
-  final res = await bind.mainTestIfValidServer(server: value);
-  return res.isEmpty ? null : res;
+TextFormField serverSettingsTextFormField({
+  required String label,
+  required TextEditingController controller,
+  required String errorMsg,
+  String? Function(String?)? validator,
+  bool autofocus = false,
+  bool showLabelText = true,
+  EdgeInsetsGeometry? contentPadding,
+}) {
+  return TextFormField(
+    controller: controller,
+    decoration: InputDecoration(
+      labelText: showLabelText ? label : null,
+      errorText: errorMsg.isEmpty ? null : errorMsg,
+      contentPadding: contentPadding,
+    ),
+    validator: validator,
+    autofocus: autofocus,
+    keyboardType: TextInputType.visiblePassword,
+    textCapitalization: TextCapitalization.none,
+    autocorrect: false,
+    enableSuggestions: false,
+    smartDashesType: SmartDashesType.disabled,
+    smartQuotesType: SmartQuotesType.disabled,
+    enableIMEPersonalizedLearning: false,
+    spellCheckConfiguration: const SpellCheckConfiguration.disabled(),
+  );
+}
+
+void setPrivacyModeDialog(
+  OverlayDialogManager dialogManager,
+  List<TToggleMenu> privacyModeList,
+  RxString privacyModeState,
+) async {
+  dialogManager.dismissAll();
+  dialogManager.show((setState, close, context) {
+    return CustomAlertDialog(
+      title: Text(translate('Privacy mode')),
+      content: Column(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: privacyModeList
+              .map((value) => CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
+                    title: value.child,
+                    value: value.value,
+                    onChanged: value.onChanged,
+                  ))
+              .toList()),
+    );
+  }, backDismiss: true, clickMaskDismiss: true);
 }

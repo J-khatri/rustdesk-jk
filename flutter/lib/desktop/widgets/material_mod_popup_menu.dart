@@ -271,7 +271,7 @@ class PopupMenuItem<T> extends PopupMenuEntry<T> {
   /// The text style of the popup menu item.
   ///
   /// If this property is null, then [PopupMenuThemeData.textStyle] is used.
-  /// If [PopupMenuThemeData.textStyle] is also null, then [TextTheme.subtitle1]
+  /// If [PopupMenuThemeData.textStyle] is also null, then [TextTheme.titleMedium]
   /// of [ThemeData.textTheme] is used.
   final TextStyle? textStyle;
 
@@ -323,6 +323,9 @@ class PopupMenuItem<T> extends PopupMenuEntry<T> {
 /// [PopupMenuItem]. The first, `T`, must match the type argument of that widget
 /// class, and is the type of values returned from this menu.
 class PopupMenuItemState<T, W extends PopupMenuItem<T>> extends State<W> {
+  @protected
+  FocusNode? get focusNode => null;
+
   /// The menu item contents.
   ///
   /// Used by the [build] method.
@@ -341,8 +344,9 @@ class PopupMenuItemState<T, W extends PopupMenuItem<T>> extends State<W> {
   @protected
   void handleTap() {
     widget.onTap?.call();
-
-    Navigator.pop<T>(context, widget.value);
+    if (Navigator.canPop(context)) {
+      Navigator.pop<T>(context, widget.value);
+    }
   }
 
   @override
@@ -351,7 +355,7 @@ class PopupMenuItemState<T, W extends PopupMenuItem<T>> extends State<W> {
     final PopupMenuThemeData popupMenuTheme = PopupMenuTheme.of(context);
     TextStyle style = widget.textStyle ??
         popupMenuTheme.textStyle ??
-        theme.textTheme.subtitle1!;
+        theme.textTheme.titleMedium!;
 
     if (!widget.enabled) style = style.copyWith(color: theme.disabledColor);
 
@@ -387,8 +391,35 @@ class PopupMenuItemState<T, W extends PopupMenuItem<T>> extends State<W> {
         //   child: item,
         // ),
         child: TextButton(
+          focusNode: focusNode,
           onPressed: widget.enabled ? handleTap : null,
-          child: item,
+          style: ButtonStyle(
+            shape: const MaterialStatePropertyAll(RoundedRectangleBorder()),
+            overlayColor: MaterialStateProperty.resolveWith((states) {
+              final color = theme.colorScheme.onSurface;
+              if (states.contains(MaterialState.pressed)) {
+                return color.withOpacity(0.1);
+              }
+              if (states.contains(MaterialState.hovered)) {
+                return color.withOpacity(0.08);
+              }
+              if (states.contains(MaterialState.focused)) {
+                return color.withOpacity(0.1);
+              }
+              return Colors.transparent;
+            }),
+          ),
+          child: TextButtonTheme(
+            data: TextButtonThemeData(
+              // Inner buttons keep their layout and callbacks; the row paints feedback.
+              style: (TextButtonTheme.of(context).style ?? const ButtonStyle())
+                  .copyWith(
+                overlayColor: const MaterialStatePropertyAll(Colors.transparent),
+                splashFactory: NoSplash.splashFactory,
+              ),
+            ),
+            child: item,
+          ),
         ),
       ),
     );
@@ -655,11 +686,13 @@ class _PopupMenuRouteLayout extends SingleChildLayoutDelegate {
     this.selectedItemIndex,
     this.textDirection,
     this.padding,
-    this.avoidBounds,
-  );
+    this.avoidBounds, {
+    this.submenuAnchor,
+  });
 
   // Rectangle of underlying button, relative to the overlay's dimensions.
   final RelativeRect position;
+  final Rect? submenuAnchor;
 
   // The sizes of each item are computed when the menu is laid out, and before
   // the route is laid out.
@@ -734,6 +767,14 @@ class _PopupMenuRouteLayout extends SingleChildLayoutDelegate {
         DisplayFeatureSubScreen.subScreensInBounds(
             Offset.zero & size, avoidBounds);
     final Rect subScreen = _closestScreen(subScreens, originCenter);
+    final anchor = submenuAnchor;
+    if (anchor != null) {
+      final left = anchor.left - childSize.width;
+      if (wantedPosition.dx + childSize.width >
+          subScreen.right - _kMenuScreenPadding - padding.right) {
+        return _fitInsideScreen(subScreen, childSize, Offset(left, y));
+      }
+    }
     return _fitInsideScreen(subScreen, childSize, wantedPosition);
   }
 
@@ -780,6 +821,7 @@ class _PopupMenuRouteLayout extends SingleChildLayoutDelegate {
     assert(itemSizes.length == oldDelegate.itemSizes.length);
 
     return position != oldDelegate.position ||
+        submenuAnchor != oldDelegate.submenuAnchor ||
         selectedItemIndex != oldDelegate.selectedItemIndex ||
         textDirection != oldDelegate.textDirection ||
         !listEquals(itemSizes, oldDelegate.itemSizes) ||
@@ -788,9 +830,66 @@ class _PopupMenuRouteLayout extends SingleChildLayoutDelegate {
   }
 }
 
+class PopupMenuOverlay<T> extends StatelessWidget {
+  const PopupMenuOverlay({
+    required this.anchor,
+    required this.items,
+    super.key,
+  });
+
+  final Rect anchor;
+  final List<PopupMenuEntry<T>> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final mediaQuery = MediaQuery.of(context);
+    final theme = PopupMenuTheme.of(context);
+    return MediaQuery.removePadding(
+      context: context,
+      removeTop: true,
+      removeBottom: true,
+      removeLeft: true,
+      removeRight: true,
+      child: LayoutBuilder(builder: (context, constraints) {
+        return CustomSingleChildLayout(
+          delegate: _PopupMenuRouteLayout(
+            RelativeRect.fromRect(anchor.shift(Offset(anchor.width, 0)),
+                Offset.zero & constraints.biggest),
+            const [],
+            null,
+            Directionality.of(context),
+            mediaQuery.padding,
+            DisplayFeatureSubScreen.avoidBounds(mediaQuery).toSet(),
+            submenuAnchor: anchor,
+          ),
+          child: Material(
+            shape: theme.shape,
+            color: theme.color,
+            type: MaterialType.card,
+            elevation: theme.elevation ?? 8.0,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                  minWidth: _kMenuMinWidth, maxWidth: _kMenuMaxWidth),
+              child: IntrinsicWidth(
+                stepWidth: _kMenuWidthStep,
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(
+                      vertical: _kMenuVerticalPadding),
+                  child: ListBody(children: items),
+                ),
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+  }
+}
+
 class _PopupMenuRoute<T> extends PopupRoute<T> {
   _PopupMenuRoute({
     required this.position,
+    this.submenuAnchor,
     required this.items,
     this.menuWrapper,
     this.initialValue,
@@ -804,6 +903,7 @@ class _PopupMenuRoute<T> extends PopupRoute<T> {
   }) : itemSizes = List<Size?>.filled(items.length, null);
 
   final RelativeRect position;
+  final Rect? submenuAnchor;
   final List<PopupMenuEntry<T>> items;
   final MenuWrapper? menuWrapper;
   final List<Size?> itemSizes;
@@ -873,6 +973,7 @@ class _PopupMenuRoute<T> extends PopupRoute<T> {
               Directionality.of(context),
               mediaQuery.padding,
               _avoidBounds(mediaQuery),
+              submenuAnchor: submenuAnchor,
             ),
             child: capturedThemes.wrap(menu),
           );
@@ -1041,6 +1142,7 @@ class PopupMenu<T> extends StatelessWidget {
 Future<T?> showMenu<T>({
   required BuildContext context,
   required RelativeRect position,
+  Rect? submenuAnchor,
   required List<PopupMenuEntry<T>> items,
   MenuWrapper? menuWrapper,
   T? initialValue,
@@ -1069,6 +1171,7 @@ Future<T?> showMenu<T>({
       Navigator.of(context, rootNavigator: useRootNavigator);
   return navigator.push(_PopupMenuRoute<T>(
     position: position,
+    submenuAnchor: submenuAnchor,
     items: items,
     menuWrapper: menuWrapper,
     initialValue: initialValue,
@@ -1351,6 +1454,9 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>> {
         menuWrapper: widget.menuWrapper,
         initialValue: widget.initialValue,
         position: position,
+        submenuAnchor: widget.position == PopupMenuPosition.overSide
+            ? button.localToGlobal(Offset.zero, ancestor: overlay) & button.size
+            : null,
         shape: widget.shape ?? popupMenuTheme.shape,
         color: widget.color ?? popupMenuTheme.color,
         constraints: widget.constraints,
@@ -1378,7 +1484,6 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>> {
 
   @override
   Widget build(BuildContext context) {
-    final IconThemeData iconTheme = IconTheme.of(context);
     final bool enableFeedback = widget.enableFeedback ??
         PopupMenuTheme.of(context).enableFeedback ??
         true;

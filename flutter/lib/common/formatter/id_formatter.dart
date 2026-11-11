@@ -26,13 +26,25 @@ class IDTextInputFormatter extends TextInputFormatter {
         selection: TextSelection.collapsed(
           offset: newID.length - selectionIndexFromTheRight,
         ),
+        // https://github.com/flutter/flutter/issues/78066#issuecomment-797869906
+        composing: newValue.composing,
       );
     }
   }
 }
 
+// Pasted IDs can carry a trailing newline or tab (e.g. copied from a
+// spreadsheet cell) or non-breaking spaces, so strip all whitespace, not only
+// plain spaces.
+final _whitespace = RegExp(r'\s');
+
 String formatID(String id) {
-  String id2 = id.replaceAll(' ', '');
+  String id2 = id.replaceAll(_whitespace, '');
+  String suffix = '';
+  if (id2.endsWith(r'\r') || id2.endsWith(r'/r')) {
+    suffix = id2.substring(id2.length - 2, id2.length);
+    id2 = id2.substring(0, id2.length - 2);
+  }
   if (int.tryParse(id2) == null) return id;
   String newID = '';
   if (id2.length <= 3) {
@@ -45,9 +57,9 @@ String formatID(String id) {
       newID += " ${id2.substring(i, i + 3)}";
     }
   }
-  return newID;
+  return newID + suffix;
 }
 
 String trimID(String id) {
-  return id.replaceAll(' ', '');
+  return id.replaceAll(_whitespace, '');
 }

@@ -2,6 +2,7 @@ use std::ffi::CString;
 use std::ptr;
 use std::rc::Rc;
 
+use crate::Pixfmt;
 use hbb_common::libc;
 
 use super::ffi::*;
@@ -11,7 +12,12 @@ use super::{Display, Rect, Server};
 
 pub struct DisplayIter {
     outer: xcb_screen_iterator_t,
-    inner: Option<(xcb_randr_monitor_info_iterator_t, xcb_window_t)>,
+    // The monitor iterator points into the reply, so the reply is freed only when moving on.
+    inner: Option<(
+        xcb_randr_monitor_info_iterator_t,
+        xcb_window_t,
+        *mut xcb_randr_get_monitors_reply_t,
+    )>,
     server: Rc<Server>,
 }
 
@@ -29,7 +35,11 @@ impl DisplayIter {
     fn next_screen(
         outer: &mut xcb_screen_iterator_t,
         server: &Server,
-    ) -> Option<(xcb_randr_monitor_info_iterator_t, xcb_window_t)> {
+    ) -> Option<(
+        xcb_randr_monitor_info_iterator_t,
+        xcb_window_t,
+        *mut xcb_randr_get_monitors_reply_t,
+    )> {
         if outer.rem == 0 {
             return None;
         }
@@ -47,10 +57,17 @@ impl DisplayIter {
 
             let inner = xcb_randr_get_monitors_monitors_iterator(response);
 
-            libc::free(response as *mut _);
             xcb_screen_next(outer);
 
-            Some((inner, root))
+            Some((inner, root, response))
+        }
+    }
+
+    fn free_reply(&mut self) {
+        if let Some((_, _, response)) = self.inner.take() {
+            unsafe {
+                libc::free(response as *mut _);
+            }
         }
     }
 }
@@ -60,13 +77,13 @@ impl Iterator for DisplayIter {
 
     fn next(&mut self) -> Option<Display> {
         loop {
-            if let Some((ref mut inner, root)) = self.inner {
+            if let Some((ref mut inner, root, _)) = self.inner {
                 // If there is something in the current screen, return that.
                 if inner.rem != 0 {
                     unsafe {
                         let data = &*inner.data;
                         let name = get_atom_name(self.server.raw(), data.name);
-
+                        let pixfmt = get_pixfmt(self.server.raw(), root).unwrap_or(Pixfmt::BGRA);
                         let display = Display::new(
                             self.server.clone(),
                             data.primary != 0,
@@ -78,6 +95,7 @@ impl Iterator for DisplayIter {
                             },
                             root,
                             name,
+                            pixfmt,
                         );
 
                         xcb_randr_monitor_info_next(inner);
@@ -90,8 +108,15 @@ impl Iterator for DisplayIter {
             }
 
             // The current screen was empty, so try the next screen.
+            self.free_reply();
             self.inner = Self::next_screen(&mut self.outer, &self.server);
         }
+    }
+}
+
+impl Drop for DisplayIter {
+    fn drop(&mut self) {
+        self.free_reply();
     }
 }
 
@@ -101,12 +126,8 @@ fn get_atom_name(conn: *mut xcb_connection_t, atom: xcb_atom_t) -> String {
         return empty;
     }
     unsafe {
-        let mut e: xcb_generic_error_t = std::mem::zeroed();
-        let reply = xcb_get_atom_name_reply(
-            conn,
-            xcb_get_atom_name(conn, atom),
-            &mut ((&mut e) as *mut xcb_generic_error_t) as _,
-        );
+        let mut e: *mut xcb_generic_error_t = std::ptr::null_mut();
+        let reply = xcb_get_atom_name_reply(conn, xcb_get_atom_name(conn, atom), &mut e as _);
         if reply == std::ptr::null() {
             return empty;
         }
@@ -119,5 +140,22 @@ fn get_atom_name(conn: *mut xcb_connection_t, atom: xcb_atom_t) -> String {
             return s.to_string_lossy().to_string();
         }
         empty
+    }
+}
+
+unsafe fn get_pixfmt(conn: *mut xcb_connection_t, root: xcb_window_t) -> Option<Pixfmt> {
+    let geo_cookie = xcb_get_geometry_unchecked(conn, root);
+    let geo = xcb_get_geometry_reply(conn, geo_cookie, ptr::null_mut());
+    if geo.is_null() {
+        return None;
+    }
+    let depth = (*geo).depth;
+    libc::free(geo as _);
+    // now only support little endian
+    // https://github.com/FFmpeg/FFmpeg/blob/a9c05eb657d0d05f3ac79fe9973581a41b265a5e/libavdevice/xcbgrab.c#L519
+    match depth {
+        16 => Some(Pixfmt::RGB565LE),
+        32 => Some(Pixfmt::BGRA),
+        _ => None,
     }
 }

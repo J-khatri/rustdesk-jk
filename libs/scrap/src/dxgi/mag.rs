@@ -1,4 +1,6 @@
 // logic from webrtc -- https://github.com/shiguredo/libwebrtc/blob/main/modules/desktop_capture/win/screen_capturer_win_magnifier.cc
+#![allow(non_snake_case)]
+
 use lazy_static;
 use std::{
     ffi::CString,
@@ -48,6 +50,33 @@ extern "C" {
 
 lazy_static::lazy_static! {
     static ref MAG_BUFFER: Mutex<(bool, Vec<u8>)> =  Default::default();
+}
+
+fn find_windows(cls: &str, name: &str) -> Result<Vec<HWND>> {
+    let name_c = CString::new(name)?;
+    let cls_c = if cls.is_empty() {
+        None
+    } else {
+        Some(CString::new(cls)?)
+    };
+    let mut hwnds = Vec::new();
+    unsafe {
+        let mut after = NULL as _;
+        loop {
+            let hwnd = FindWindowExA(
+                NULL as _,
+                after,
+                cls_c.as_ref().map_or(NULL as _, |c| c.as_ptr()),
+                name_c.as_ptr(),
+            );
+            if hwnd.is_null() {
+                break;
+            }
+            hwnds.push(hwnd);
+            after = hwnd;
+        }
+    }
+    Ok(hwnds)
 }
 
 pub type REFWICPixelFormatGUID = *const GUID;
@@ -129,19 +158,19 @@ impl MagInterface {
         unsafe {
             // load lib
             let lib_file_name = "Magnification.dll";
-            let lib_file_name_c = CString::new(lib_file_name).unwrap();
+            let lib_file_name_c = CString::new(lib_file_name)?;
             s.lib_handle = LoadLibraryExA(
                 lib_file_name_c.as_ptr() as _,
                 NULL,
-                LOAD_WITH_ALTERED_SEARCH_PATH,
+                LOAD_LIBRARY_SEARCH_SYSTEM32,
             );
             if s.lib_handle.is_null() {
                 return Err(Error::new(
                     ErrorKind::Other,
                     format!(
-                        "Failed to LoadLibraryExA {}, error: {}",
+                        "Failed to LoadLibraryExA {}, error {}",
                         lib_file_name,
-                        GetLastError()
+                        Error::last_os_error()
                     ),
                 ));
             };
@@ -173,7 +202,7 @@ impl MagInterface {
                 if FALSE == init_func() {
                     return Err(Error::new(
                         ErrorKind::Other,
-                        format!("Failed to MagInitialize, error: {}", GetLastError()),
+                        format!("Failed to MagInitialize, error {}", Error::last_os_error()),
                     ));
                 } else {
                     s.init_succeeded = true;
@@ -189,15 +218,15 @@ impl MagInterface {
     }
 
     unsafe fn load_func(lib_module: HMODULE, func_name: &str) -> Result<FARPROC> {
-        let func_name_c = CString::new(func_name).unwrap();
+        let func_name_c = CString::new(func_name)?;
         let func = GetProcAddress(lib_module, func_name_c.as_ptr() as _);
         if func.is_null() {
             return Err(Error::new(
                 ErrorKind::Other,
                 format!(
-                    "Failed to GetProcAddress {}, error: {}",
+                    "Failed to GetProcAddress {}, error {}",
                     func_name,
-                    GetLastError()
+                    Error::last_os_error()
                 ),
             ));
         }
@@ -209,14 +238,14 @@ impl MagInterface {
             if let Some(uninit_func) = self.mag_uninitialize_func {
                 unsafe {
                     if FALSE == uninit_func() {
-                        println!("Failed MagUninitialize {}", GetLastError())
+                        println!("Failed MagUninitialize, error {}", Error::last_os_error())
                     }
                 }
             }
             if !self.lib_handle.is_null() {
                 unsafe {
                     if FALSE == FreeLibrary(self.lib_handle) {
-                        println!("Failed FreeLibrary {}", GetLastError())
+                        println!("Failed FreeLibrary, error {}", Error::last_os_error())
                     }
                 }
                 self.lib_handle = NULL as _;
@@ -245,9 +274,8 @@ pub struct CapturerMag {
     rect: RECT,
     width: usize,
     height: usize,
-
-    use_yuv: bool,
-    data: Vec<u8>,
+    excluded_window_target: Option<(String, String)>,
+    excluded_windows: Vec<HWND>,
 }
 
 impl Drop for CapturerMag {
@@ -262,12 +290,11 @@ impl CapturerMag {
         MagInterface::new().is_ok()
     }
 
-    pub(crate) fn new(
-        origin: (i32, i32),
-        width: usize,
-        height: usize,
-        use_yuv: bool,
-    ) -> Result<Self> {
+    // This captures through the legacy Windows Magnification API. Do not infer
+    // multi-monitor capture support from privacy overlay coverage: WebRTC also
+    // disables its magnifier capturer when SM_CMONITORS != 1.
+    // https://webrtc.googlesource.com/src/+/1845922d5a1bf9c27deeffb4a8c8daea124434c1/modules/desktop_capture/win/screen_capturer_win_magnifier.cc
+    pub(crate) fn new(origin: (i32, i32), width: usize, height: usize) -> Result<Self> {
         unsafe {
             let x = GetSystemMetrics(SM_XVIRTUALSCREEN);
             let y = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -311,8 +338,8 @@ impl CapturerMag {
             },
             width,
             height,
-            use_yuv,
-            data: Vec::new(),
+            excluded_window_target: None,
+            excluded_windows: Vec::new(),
         };
 
         unsafe {
@@ -325,7 +352,10 @@ impl CapturerMag {
             ) {
                 return Err(Error::new(
                     ErrorKind::Other,
-                    format!("Failed to GetModuleHandleExA, error: {}", GetLastError()),
+                    format!(
+                        "Failed to GetModuleHandleExA, error {}",
+                        Error::last_os_error()
+                    ),
                 ));
             }
 
@@ -352,7 +382,10 @@ impl CapturerMag {
                 if code != ERROR_CLASS_ALREADY_EXISTS {
                     return Err(Error::new(
                         ErrorKind::Other,
-                        format!("Failed to RegisterClassExA, error: {}", code),
+                        format!(
+                            "Failed to RegisterClassExA, error {}",
+                            Error::from_raw_os_error(code as _)
+                        ),
                     ));
                 }
             }
@@ -376,8 +409,8 @@ impl CapturerMag {
                 return Err(Error::new(
                     ErrorKind::Other,
                     format!(
-                        "Failed to CreateWindowExA host_window, error: {}",
-                        GetLastError()
+                        "Failed to CreateWindowExA host_window, error {}",
+                        Error::last_os_error()
                     ),
                 ));
             }
@@ -401,8 +434,8 @@ impl CapturerMag {
                 return Err(Error::new(
                     ErrorKind::Other,
                     format!(
-                        "Failed CreateWindowA magnifier_window, error: {}",
-                        GetLastError()
+                        "Failed CreateWindowA magnifier_window, error {}",
+                        Error::last_os_error()
                     ),
                 ));
             }
@@ -421,8 +454,8 @@ impl CapturerMag {
                     return Err(Error::new(
                         ErrorKind::Other,
                         format!(
-                            "Failed to MagSetImageScalingCallback, error: {}",
-                            GetLastError()
+                            "Failed to MagSetImageScalingCallback, error {}",
+                            Error::last_os_error()
                         ),
                     ));
                 }
@@ -437,24 +470,42 @@ impl CapturerMag {
         Ok(s)
     }
 
-    pub(crate) fn set_use_yuv(&mut self, use_yuv: bool) {
-        self.use_yuv = use_yuv;
+    pub(crate) fn exclude(&mut self, cls: &str, name: &str) -> Result<bool> {
+        let mut hwnds = find_windows(cls, name)?;
+        hwnds.sort_unstable_by_key(|hwnd| *hwnd as usize);
+        self.excluded_window_target = Some((cls.to_owned(), name.to_owned()));
+        if hwnds.is_empty() {
+            self.excluded_windows.clear();
+            return Ok(false);
+        }
+
+        self.exclude_windows(&mut hwnds)?;
+        self.excluded_windows = hwnds;
+        Ok(true)
     }
 
-    pub(crate) fn exclude(&mut self, cls: &str, name: &str) -> Result<bool> {
-        let name_c = CString::new(name).unwrap();
+    fn refresh_excluded_windows(&mut self) -> Result<()> {
+        let Some((cls, name)) = self.excluded_window_target.as_ref() else {
+            return Ok(());
+        };
+        let mut hwnds = find_windows(cls, name)?;
+        hwnds.sort_unstable_by_key(|hwnd| *hwnd as usize);
+        // This runs from frame() because refreshed privacy overlays get new
+        // HWNDs. It is only used on the legacy magnifier backend while privacy
+        // mode is active; if it shows up as hot-path cost, throttle this check.
+        // Keep the previous filter list while privacy windows are being recreated.
+        if hwnds.is_empty() || hwnds == self.excluded_windows {
+            return Ok(());
+        }
+
+        self.exclude_windows(&mut hwnds)?;
+        self.excluded_windows = hwnds;
+        Ok(())
+    }
+
+    fn exclude_windows(&mut self, hwnds: &mut [HWND]) -> Result<bool> {
+        let count = hwnds.len() as _;
         unsafe {
-            let mut hwnd = if cls.len() == 0 {
-                FindWindowExA(NULL as _, NULL as _, NULL as _, name_c.as_ptr())
-            } else {
-                let cls_c = CString::new(cls).unwrap();
-                FindWindowExA(NULL as _, NULL as _, cls_c.as_ptr(), name_c.as_ptr())
-            };
-
-            if hwnd.is_null() {
-                return Ok(false);
-            }
-
             if let Some(set_window_filter_list_func) =
                 self.mag_interface.set_window_filter_list_func
             {
@@ -462,17 +513,16 @@ impl CapturerMag {
                     == set_window_filter_list_func(
                         self.magnifier_window,
                         MW_FILTERMODE_EXCLUDE,
-                        1,
-                        &mut hwnd,
+                        count,
+                        hwnds.as_mut_ptr(),
                     )
                 {
                     return Err(Error::new(
                         ErrorKind::Other,
                         format!(
-                            "Failed MagSetWindowFilterList for cls {} name {}, err: {}",
-                            cls,
-                            name,
-                            GetLastError()
+                            "Failed MagSetWindowFilterList for {} windows, error {}",
+                            count,
+                            Error::last_os_error()
                         ),
                     ));
                 }
@@ -502,6 +552,7 @@ impl CapturerMag {
     }
 
     pub(crate) fn frame(&mut self, data: &mut Vec<u8>) -> Result<()> {
+        self.refresh_excluded_windows()?;
         Self::clear_data();
 
         unsafe {
@@ -549,7 +600,7 @@ impl CapturerMag {
                         self.rect.top,
                         self.rect.right - self.rect.left,
                         self.rect.bottom - self.rect.top,
-                        GetLastError()
+                        Error::last_os_error()
                     ),
                 ));
             }
@@ -560,7 +611,10 @@ impl CapturerMag {
                 if FALSE == set_window_source_func(self.magnifier_window, self.rect) {
                     return Err(Error::new(
                         ErrorKind::Other,
-                        format!("Failed to MagSetWindowSource, error: {}", GetLastError()),
+                        format!(
+                            "Failed to MagSetWindowSource, error {}",
+                            Error::last_os_error()
+                        ),
                     ));
                 }
             } else {
@@ -579,22 +633,9 @@ impl CapturerMag {
             ));
         }
 
-        if self.use_yuv {
-            self.data.resize(lock.1.len(), 0);
-            unsafe {
-                std::ptr::copy_nonoverlapping(&mut lock.1[0], &mut self.data[0], self.data.len());
-            }
-            crate::common::bgra_to_i420(
-                self.width as usize,
-                self.height as usize,
-                &self.data,
-                data,
-            );
-        } else {
-            data.resize(lock.1.len(), 0);
-            unsafe {
-                std::ptr::copy_nonoverlapping(&mut lock.1[0], &mut data[0], data.len());
-            }
+        data.resize(lock.1.len(), 0);
+        unsafe {
+            std::ptr::copy_nonoverlapping(&mut lock.1[0], &mut data[0], data.len());
         }
 
         Ok(())
@@ -605,7 +646,10 @@ impl CapturerMag {
             unsafe {
                 if FALSE == DestroyWindow(self.magnifier_window) {
                     //
-                    println!("Failed DestroyWindow magnifier window {}", GetLastError())
+                    println!(
+                        "Failed DestroyWindow magnifier window, error {}",
+                        Error::last_os_error()
+                    )
                 }
             }
         }
@@ -615,7 +659,10 @@ impl CapturerMag {
             unsafe {
                 if FALSE == DestroyWindow(self.host_window) {
                     //
-                    println!("Failed DestroyWindow host window {}", GetLastError())
+                    println!(
+                        "Failed DestroyWindow host window, error {}",
+                        Error::last_os_error()
+                    )
                 }
             }
         }
@@ -643,19 +690,5 @@ impl CapturerMag {
         std::ptr::copy_nonoverlapping(srcdata as _, &mut lock.1[0], srcheader.cbSize);
         lock.0 = true;
         TRUE
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn test() {
-        let mut capture_mag = CapturerMag::new((0, 0), 1920, 1080, false).unwrap();
-        capture_mag.exclude("", "RustDeskPrivacyWindow").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(1000 * 10));
-        let mut data = Vec::new();
-        capture_mag.frame(&mut data).unwrap();
-        println!("capture data len: {}", data.len());
     }
 }
