@@ -167,7 +167,7 @@ mod tests {
                 std::env::temp_dir().join(format!("rustdesk-handoff-{}", uuid::Uuid::new_v4()));
             let source = root.join("source 中文 !&^@().bat");
             fs::create_dir(&root).unwrap();
-            let bytes = shortcut_bytes(r"C:\RustDesk.exe", Some("--tray"), None).unwrap();
+            let bytes = shortcut_bytes(r"C:\HelpLink.exe", Some("--tray"), None).unwrap();
             let shortcut =
                 ProtectedInstallFile::new(&root.join("shortcut !&^@().tmp"), &bytes).unwrap();
             let marker = root.join("copied.lnk");

@@ -60,3 +60,9 @@ flutter/web/
 /third_party/libdrmtap/
 # Local git worktrees
 .worktrees/
+
+# HelpLink brand assets (repo ignores *png by default)
+!flutter/assets/icon.png
+!flutter/assets/logo.png
+!flutter/assets/logo_light.png
+!flutter/assets/logo_dark.png

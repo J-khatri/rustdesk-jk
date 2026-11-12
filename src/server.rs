@@ -1020,7 +1020,7 @@ mod windows_gui_startup_tests {
     fn windows_gui_survives_ipc_bind_failure() {
         if std::env::var_os(CHILD_TEST).is_some() {
             *hbb_common::config::APP_NAME.write().unwrap() =
-                format!("RustDesk-ipc-test-{}", std::process::id());
+                format!("HelpLink-ipc-test-{}", std::process::id());
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()

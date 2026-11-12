@@ -20,7 +20,7 @@ pub(crate) fn initialize_config() {
     static INITIALIZED: std::sync::Once = std::sync::Once::new();
     INITIALIZED.call_once(|| {
         *hbb_common::config::APP_NAME.write().unwrap() =
-            format!("RustDeskV2Test{}", uuid::Uuid::new_v4());
+            format!("HelpLinkV2Test{}", uuid::Uuid::new_v4());
     });
 }
 

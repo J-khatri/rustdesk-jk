@@ -286,7 +286,7 @@ fn append_owner_marker(mut data: Vec<ClipboardData>, side: ClipboardSide) -> Vec
         side.get_owner_data(),
     ));
     // The Windows setter stops at the first format it fails to write, so a marker placed
-    // last can be skipped, leaving content RustDesk no longer recognizes as its own.
+    // last can be skipped, leaving content HelpLink no longer recognizes as its own.
     #[cfg(target_os = "windows")]
     data.insert(0, marker);
     #[cfg(not(target_os = "windows"))]
@@ -527,7 +527,7 @@ impl ClipboardContext {
                 #[cfg(target_os = "macos")]
                 let is_kde_x11 = false;
                 let clear_holder_text = if is_kde_x11 {
-                    "RustDesk placeholder to clear the file clipboard"
+                    "HelpLink placeholder to clear the file clipboard"
                 } else {
                     ""
                 }
