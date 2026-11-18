@@ -1169,22 +1169,22 @@ jobs:
               exit 1
             fi
           fi
-          create-dmg --icon "HelpLink.app" 200 190 --hide-extension "HelpLink.app" --window-size 800 400 --app-drop-link 600 185 rustdesk-${{ env.VERSION }}.dmg ./flutter/build/macos/Build/Products/Release/HelpLink.app
-          codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict rustdesk-${{ env.VERSION }}.dmg -vvv
-          # notarize the rustdesk-${{ env.VERSION }}.dmg
-          rcodesign notary-submit --api-key-path ${{ github.workspace }}/rustdesk.json  --staple rustdesk-${{ env.VERSION }}.dmg
+          create-dmg --icon "HelpLink.app" 200 190 --hide-extension "HelpLink.app" --window-size 800 400 --app-drop-link 600 185 helplink-${{ env.VERSION }}.dmg ./flutter/build/macos/Build/Products/Release/HelpLink.app
+          codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict helplink-${{ env.VERSION }}.dmg -vvv
+          # notarize the helplink-${{ env.VERSION }}.dmg
+          rcodesign notary-submit --api-key-path ${{ github.workspace }}/rustdesk.json  --staple helplink-${{ env.VERSION }}.dmg
 
-      - name: Rename rustdesk
+      - name: Rename dmg
         if: env.UPLOAD_ARTIFACT == 'true'
         shell: bash
         env:
           VERSION: ${{ env.VERSION }}
           ARCH: ${{ matrix.job.arch }}
         run: |
-          if [ -f "rustdesk-${VERSION}.dmg" ]; then
-              mv "rustdesk-${VERSION}.dmg" "rustdesk-${VERSION}-${ARCH}.dmg"
+          if [ -f "helplink-${VERSION}.dmg" ]; then
+              mv "helplink-${VERSION}.dmg" "helplink-${VERSION}-${ARCH}.dmg"
           fi
-          test -f "rustdesk-${VERSION}-${ARCH}.dmg"
+          test -f "helplink-${VERSION}-${ARCH}.dmg"
 
       - name: Upload signed macOS DMG
         if: env.UPLOAD_ARTIFACT == 'true' && env.PUBLISH_UPDATE_METADATA == 'true' && env.MACOS_P12_BASE64 != null
