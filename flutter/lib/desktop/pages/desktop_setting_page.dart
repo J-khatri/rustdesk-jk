@@ -2618,9 +2618,6 @@ class _AboutState extends State<_About> {
               SelectionArea(
                   child: Text('HelpLink is based on RustDesk (AGPL-3.0).')
                       .marginSymmetric(vertical: 4.0)),
-              SelectionArea(
-                  child: Text('HelpLink is based on RustDesk (AGPL-3.0).')
-                      .marginSymmetric(vertical: 4.0)),
               InkWell(
                   onTap: () {
                     launchUrlString('https://helplink.in/privacy.html');
@@ -2631,7 +2628,7 @@ class _AboutState extends State<_About> {
                   ).marginSymmetric(vertical: 4.0)),
               InkWell(
                   onTap: () {
-                    launchUrlString('https://rustdesk.com');
+                    launchUrlString('https://helplink.in');
                   },
                   child: Text(
                     translate('Website'),
@@ -2649,7 +2646,7 @@ class _AboutState extends State<_About> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Copyright © ${DateTime.now().toString().substring(0, 4)} Purslane Tech Pte. Ltd.\n$license',
+                            'Copyright © ${DateTime.now().toString().substring(0, 4)} HelpLink\n$license',
                             style: const TextStyle(color: Colors.white),
                           ),
                           Text(

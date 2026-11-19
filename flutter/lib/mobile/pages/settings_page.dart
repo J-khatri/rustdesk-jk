@@ -1212,8 +1212,6 @@ void showAbout(OverlayDialogManager dialogManager) {
         Text('Version: $version'),
         Text('HelpLink is based on RustDesk (AGPL-3.0).',
             style: TextStyle(fontSize: 12)),
-        Text('HelpLink is based on RustDesk (AGPL-3.0).',
-            style: TextStyle(fontSize: 12)),
         InkWell(
             onTap: () async {
               const url = 'https://helplink.in/';
